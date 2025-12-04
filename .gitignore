@@ -1,0 +1,12 @@
+# Existing entries
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+/.quarto/
+/.freeze/
+**/*.quarto_ipynb
+
+# Large cache files
+05_Statistical_Analysis/complex_diets_cache/
+project_workspace.RData

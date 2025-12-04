@@ -1,0 +1,2450 @@
+---
+title: "Complex_Diet Data Analysis"
+format: 
+  html:
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    code-fold: true
+    code-summary: "Show code"
+    theme: flatly
+    self-contained: true
+editor: visual
+execute: 
+  echo: true
+  warning: false
+  message: false
+  freeze: auto
+  cache: true
+---
+
+## Complex_Protein Report
+
+Este relatório está dividido em duas partes. A primeira contém toda a análise estatística dos dados metagenômicos. Vale lembrar que todo o processamento bioinformático já foi realizado, incluindo: remoção de reads de baixa qualidade, remoção de contaminação do hospedeiro, classificação taxonômica com Kraken2 e cálculo da abundância absoluta e relativa de reads para cada unidade taxonômica. Agora vamos carregar os arquivos de abundância e os metadados no R.
+
+## Load packages
+
+```{r}
+library(tidyverse)
+library(BiocManager)
+library(phyloseq)
+library(labdsv)
+library(ape)
+library(Maaslin2)
+library(ggplot2)
+library(dplyr)
+library(forcats)
+library(viridis)
+library(vegan)
+library(knitr)
+library(mixOmics)
+library(ALDEx2)
+library(ComplexHeatmap)
+library(circlize)
+library(RColorBrewer)
+library(ANCOMBC)
+library(Biostrings)
+library(scater)
+library(TreeSummarizedExperiment)
+library(mia)
+library(metagMisc)
+library(devtools)
+library(pairwiseAdonis)
+library(ggpubr)
+library(openxlsx)
+library(maaslin3)
+library(patchwork)
+
+```
+
+## Load data
+
+```{r}
+
+
+#| label: load-bracken-data
+
+# Load all taxonomic levels
+domain_raw <- read.delim("merged_D_abundance.txt", header = TRUE, row.names = 1, check.names = FALSE)
+phylum_raw <- read.delim("merged_P_abundance.txt", header = TRUE, row.names = 1, check.names = FALSE)
+class_raw <- read.delim("merged_C_abundance.txt", header = TRUE, row.names = 1, check.names = FALSE)
+order_raw <- read.delim("merged_O_abundance.txt", header = TRUE, row.names = 1, check.names = FALSE)
+family_raw <- read.delim("merged_F_abundance.txt", header = TRUE, row.names = 1, check.names = FALSE)
+genus_raw <- read.delim("merged_G_abundance.txt", header = TRUE, row.names = 1, check.names = FALSE)
+species_raw <- read.delim("merged_S_abundance.txt", header = TRUE, row.names = 1, check.names = FALSE)
+
+# Load metadata
+meta_tab <- read.csv("meta.csv", row.names = 1)
+
+
+```
+
+## Separate counts and fractions (using species as example - repeat for other levels)
+
+```{r}
+#| label: separate-counts-fractions
+
+# Get column names
+all_cols <- colnames(species_raw)
+
+# Identify count columns (end with _num) and fraction columns (end with _frac)
+num_cols <- grep("_num$", all_cols, value = TRUE)
+frac_cols <- grep("_frac$", all_cols, value = TRUE)
+
+# Create clean sample names (remove .bracken_num suffix)
+sample_names <- gsub("\\.bracken_num$", "", num_cols)
+
+# Extract counts matrix
+species_counts <- species_raw[, num_cols]
+colnames(species_counts) <- sample_names
+species_counts <- as.matrix(species_counts)
+storage.mode(species_counts) <- "numeric"
+
+# Extract fractions matrix  
+species_frac <- species_raw[, frac_cols]
+colnames(species_frac) <- sample_names
+species_frac <- as.matrix(species_frac)
+storage.mode(species_frac) <- "numeric"
+
+# Check dimensions
+dim(species_counts)
+dim(species_frac)
+```
+
+### Repeat for all taxonomic levels:
+
+```{r}
+
+#| label: process-all-levels
+
+# Domain
+num_cols <- grep("_num$", colnames(domain_raw), value = TRUE)
+frac_cols <- grep("_frac$", colnames(domain_raw), value = TRUE)
+sample_names <- gsub("\\.bracken_num$", "", num_cols)
+
+domain_counts <- as.matrix(domain_raw[, num_cols])
+colnames(domain_counts) <- sample_names
+storage.mode(domain_counts) <- "numeric"
+
+domain_frac <- as.matrix(domain_raw[, frac_cols])
+colnames(domain_frac) <- sample_names
+storage.mode(domain_frac) <- "numeric"
+
+# Phylum
+num_cols <- grep("_num$", colnames(phylum_raw), value = TRUE)
+frac_cols <- grep("_frac$", colnames(phylum_raw), value = TRUE)
+sample_names <- gsub("\\.bracken_num$", "", num_cols)
+
+phylum_counts <- as.matrix(phylum_raw[, num_cols])
+colnames(phylum_counts) <- sample_names
+storage.mode(phylum_counts) <- "numeric"
+
+phylum_frac <- as.matrix(phylum_raw[, frac_cols])
+colnames(phylum_frac) <- sample_names
+storage.mode(phylum_frac) <- "numeric"
+
+# Class
+num_cols <- grep("_num$", colnames(class_raw), value = TRUE)
+frac_cols <- grep("_frac$", colnames(class_raw), value = TRUE)
+sample_names <- gsub("\\.bracken_num$", "", num_cols)
+
+class_counts <- as.matrix(class_raw[, num_cols])
+colnames(class_counts) <- sample_names
+storage.mode(class_counts) <- "numeric"
+
+class_frac <- as.matrix(class_raw[, frac_cols])
+colnames(class_frac) <- sample_names
+storage.mode(class_frac) <- "numeric"
+
+# Order
+num_cols <- grep("_num$", colnames(order_raw), value = TRUE)
+frac_cols <- grep("_frac$", colnames(order_raw), value = TRUE)
+sample_names <- gsub("\\.bracken_num$", "", num_cols)
+
+order_counts <- as.matrix(order_raw[, num_cols])
+colnames(order_counts) <- sample_names
+storage.mode(order_counts) <- "numeric"
+
+order_frac <- as.matrix(order_raw[, frac_cols])
+colnames(order_frac) <- sample_names
+storage.mode(order_frac) <- "numeric"
+
+# Family
+num_cols <- grep("_num$", colnames(family_raw), value = TRUE)
+frac_cols <- grep("_frac$", colnames(family_raw), value = TRUE)
+sample_names <- gsub("\\.bracken_num$", "", num_cols)
+
+family_counts <- as.matrix(family_raw[, num_cols])
+colnames(family_counts) <- sample_names
+storage.mode(family_counts) <- "numeric"
+
+family_frac <- as.matrix(family_raw[, frac_cols])
+colnames(family_frac) <- sample_names
+storage.mode(family_frac) <- "numeric"
+
+# Genus
+num_cols <- grep("_num$", colnames(genus_raw), value = TRUE)
+frac_cols <- grep("_frac$", colnames(genus_raw), value = TRUE)
+sample_names <- gsub("\\.bracken_num$", "", num_cols)
+
+genus_counts <- as.matrix(genus_raw[, num_cols])
+colnames(genus_counts) <- sample_names
+storage.mode(genus_counts) <- "numeric"
+
+genus_frac <- as.matrix(genus_raw[, frac_cols])
+colnames(genus_frac) <- sample_names
+storage.mode(genus_frac) <- "numeric"
+```
+
+### Align samples between data and metadata:
+
+```{r}
+#| label: align-samples
+
+# Find common samples between data and metadata
+common_samples <- intersect(colnames(species_counts), rownames(meta_tab))
+length(common_samples)
+
+# Subset and reorder all matrices and metadata
+meta_tab <- meta_tab[common_samples, ]
+
+domain_counts <- domain_counts[, common_samples]
+domain_frac <- domain_frac[, common_samples]
+
+phylum_counts <- phylum_counts[, common_samples]
+phylum_frac <- phylum_frac[, common_samples]
+
+class_counts <- class_counts[, common_samples]
+class_frac <- class_frac[, common_samples]
+
+order_counts <- order_counts[, common_samples]
+order_frac <- order_frac[, common_samples]
+
+family_counts <- family_counts[, common_samples]
+family_frac <- family_frac[, common_samples]
+
+genus_counts <- genus_counts[, common_samples]
+genus_frac <- genus_frac[, common_samples]
+
+species_counts <- species_counts[, common_samples]
+species_frac <- species_frac[, common_samples]
+
+```
+
+## **Set up factors and colorblind-friendly palette:**
+
+```{r}
+#| label: setup-factors-colors
+
+# Convert metadata columns to factors
+meta_tab$complex <- factor(meta_tab$complex, levels = c("low", "medium", "high"))
+meta_tab$protease <- factor(meta_tab$protease, levels = c("cont", "prot"))
+meta_tab$interaction <- factor(meta_tab$interaction)
+
+# Colorblind-friendly palette (Wong, 2011 - Nature Methods)
+cb_palette <- c("#E69F00", "#56B4E9", "#009E73", "#F0E442", 
+                "#0072B2", "#D55E00", "#CC79A7", "#999999")
+
+# Assign consistent colors to your treatment groups
+complex_colors <- c("low" = "#56B4E9", "medium" = "#E69F00", "high" = "#009E73")
+protease_colors <- c("cont" = "#0072B2", "prot" = "#D55E00")
+
+# Publication-ready theme for ggplot
+theme_publication <- theme_bw(base_size = 12) +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(color = "black", linewidth = 1),
+    axis.text = element_text(color = "black"),
+    axis.title = element_text(face = "bold"),
+    legend.background = element_rect(color = "black", linewidth = 0.5),
+    legend.title = element_text(face = "bold"),
+    strip.background = element_rect(fill = "grey90", color = "black"),
+    strip.text = element_text(face = "bold"),
+    plot.title = element_text(hjust = 0.5, face = "bold")
+  )
+
+```
+
+#### Quick data summary:
+
+```{r}
+#| label: data-summary
+
+# Summary of taxa per level
+data.frame(
+  Level = c("Domain", "Phylum", "Class", "Order", "Family", "Genus", "Species"),
+  N_Taxa = c(nrow(domain_counts), nrow(phylum_counts), nrow(class_counts),
+             nrow(order_counts), nrow(family_counts), nrow(genus_counts), 
+             nrow(species_counts)),
+  N_Samples = ncol(species_counts)
+)
+```
+
+## Alpha Diversity
+
+### Calculate alpha diversity metrics:
+
+A diversidade alfa é calculada sobre a abundância relativa. Se você somar a abundância relativa de todas as espécies dentro de uma amostra, o total deve ser igual ou muito próximo de 1. A diversidade alfa possui várias métricas - aqui utilizamos as principais. Importante: a métrica Chao1 deve ser calculada sobre o número de contagens (counts) e não sobre a abundância relativa. Por isso, observe que as tabelas têm nomes diferentes: \`\_frac\` para abundância relativa e \`\_counts\` para contagens absolutas.
+
+```{r}
+#| label: alpha-diversity-calc
+
+# Transpose matrix (vegan needs samples as rows)
+species_frac_t <- t(species_frac)
+species_count_t <- t(species_counts)
+
+
+library(vegan)
+
+# Calculate alpha diversity metrics
+alpha_div <- data.frame(
+  sample    = rownames(species_frac_t),
+  observed  = specnumber(species_frac_t),
+  shannon   = diversity(species_frac_t, index = "shannon"),
+  simpson   = diversity(species_frac_t, index = "simpson"),
+  invsimpson = diversity(species_frac_t, index = "invsimpson")
+)
+
+
+# Add Chao1 (needs integer counts)
+chao1_values <- estimateR(round(species_count_t))
+alpha_div$chao1 <- chao1_values["S.chao1", ]
+
+# Add Pielou's evenness (J = H / ln(S))
+alpha_div$pielou <- alpha_div$shannon / log(alpha_div$observed)
+
+# Merge with metadata
+alpha_div <- merge(alpha_div, meta_tab, by.x = "sample", by.y = "row.names")
+
+head(alpha_div)
+```
+
+#### Statistical tests for Complex factor:
+
+```{r}
+#| label: stats-complex
+
+# Kruskal-Wallis test for each metric (complex has 3 levels)
+kruskal_observed_complex <- kruskal.test(observed ~ complex, data = alpha_div)
+kruskal_shannon_complex <- kruskal.test(shannon ~ complex, data = alpha_div)
+kruskal_simpson_complex <- kruskal.test(simpson ~ complex, data = alpha_div)
+kruskal_invsimpson_complex <- kruskal.test(invsimpson ~ complex, data = alpha_div)
+kruskal_chao1_complex <- kruskal.test(chao1 ~ complex, data = alpha_div)
+kruskal_pielou_complex <- kruskal.test(pielou ~ complex, data = alpha_div)
+
+# Summary table
+stats_complex <- data.frame(
+  Metric = c("Observed", "Shannon", "Simpson", "InvSimpson", "Chao1", "Pielou"),
+  Chi_squared = c(kruskal_observed_complex$statistic,
+                  kruskal_shannon_complex$statistic,
+                  kruskal_simpson_complex$statistic,
+                  kruskal_invsimpson_complex$statistic,
+                  kruskal_chao1_complex$statistic,
+                  kruskal_pielou_complex$statistic),
+  p_value = c(kruskal_observed_complex$p.value,
+              kruskal_shannon_complex$p.value,
+              kruskal_simpson_complex$p.value,
+              kruskal_invsimpson_complex$p.value,
+              kruskal_chao1_complex$p.value,
+              kruskal_pielou_complex$p.value)
+)
+
+stats_complex$p_adj <- p.adjust(stats_complex$p_value, method = "BH")
+stats_complex$significance <- ifelse(stats_complex$p_adj < 0.001, "***",
+                              ifelse(stats_complex$p_adj < 0.01, "**",
+                              ifelse(stats_complex$p_adj < 0.05, "*", "ns")))
+
+kable(stats_complex, digits = 4, caption = "Kruskal-Wallis test: Alpha diversity ~ Complex")
+```
+
+#### **Statistical tests for Protease factor:**
+
+```{r}
+#| label: stats-protease
+
+# Wilcoxon test for each metric (protease has 2 levels)
+wilcox_observed_prot <- wilcox.test(observed ~ protease, data = alpha_div)
+wilcox_shannon_prot <- wilcox.test(shannon ~ protease, data = alpha_div)
+wilcox_simpson_prot <- wilcox.test(simpson ~ protease, data = alpha_div)
+wilcox_invsimpson_prot <- wilcox.test(invsimpson ~ protease, data = alpha_div)
+wilcox_chao1_prot <- wilcox.test(chao1 ~ protease, data = alpha_div)
+wilcox_pielou_prot <- wilcox.test(pielou ~ protease, data = alpha_div)
+
+# Summary table
+stats_protease <- data.frame(
+  Metric = c("Observed", "Shannon", "Simpson", "InvSimpson", "Chao1", "Pielou"),
+  W_statistic = c(wilcox_observed_prot$statistic,
+                  wilcox_shannon_prot$statistic,
+                  wilcox_simpson_prot$statistic,
+                  wilcox_invsimpson_prot$statistic,
+                  wilcox_chao1_prot$statistic,
+                  wilcox_pielou_prot$statistic),
+  p_value = c(wilcox_observed_prot$p.value,
+              wilcox_shannon_prot$p.value,
+              wilcox_simpson_prot$p.value,
+              wilcox_invsimpson_prot$p.value,
+              wilcox_chao1_prot$p.value,
+              wilcox_pielou_prot$p.value)
+)
+
+stats_protease$p_adj <- p.adjust(stats_protease$p_value, method = "BH")
+stats_protease$significance <- ifelse(stats_protease$p_adj < 0.001, "***",
+                               ifelse(stats_protease$p_adj < 0.01, "**",
+                               ifelse(stats_protease$p_adj < 0.05, "*", "ns")))
+
+kable(stats_protease, digits = 4, caption = "Wilcoxon test: Alpha diversity ~ Protease")
+```
+
+#### **Plot alpha diversity by Complex:**
+
+```{r}
+#| label: plot-alpha-complex
+#| fig-width: 12
+#| fig-height: 10
+
+# Pairwise comparisons for complex
+comparisons_complex <- list(c("low", "medium"), c("low", "high"), c("medium", "high"))
+
+# Observed richness
+p1 <- ggplot(alpha_div, aes(x = complex, y = observed, fill = complex)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.2, size = 2, alpha = 0.6) +
+  scale_fill_manual(values = complex_colors) +
+  stat_compare_means(method = "kruskal.test", label.x = 1.5, label.y = max(alpha_div$observed) * 1.1) +
+  stat_compare_means(comparisons = comparisons_complex, method = "wilcox.test", 
+                     label = "p.signif", hide.ns = TRUE) +
+  labs(x = "Complex", y = "Observed Species", title = "Observed Richness") +
+  theme_publication +
+  theme(legend.position = "none")
+
+# Shannon
+p2 <- ggplot(alpha_div, aes(x = complex, y = shannon, fill = complex)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.2, size = 2, alpha = 0.6) +
+  scale_fill_manual(values = complex_colors) +
+  stat_compare_means(method = "kruskal.test", label.x = 1.5, label.y = max(alpha_div$shannon) * 1.1) +
+  stat_compare_means(comparisons = comparisons_complex, method = "wilcox.test", 
+                     label = "p.signif", hide.ns = TRUE) +
+  labs(x = "Complex", y = "Shannon Index", title = "Shannon Diversity") +
+  theme_publication +
+  theme(legend.position = "none")
+
+# Simpson
+p3 <- ggplot(alpha_div, aes(x = complex, y = simpson, fill = complex)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.2, size = 2, alpha = 0.6) +
+  scale_fill_manual(values = complex_colors) +
+  stat_compare_means(method = "kruskal.test", label.x = 1.5, label.y = max(alpha_div$simpson) * 1.05) +
+  stat_compare_means(comparisons = comparisons_complex, method = "wilcox.test", 
+                     label = "p.signif", hide.ns = TRUE) +
+  labs(x = "Complex", y = "Simpson Index", title = "Simpson Diversity") +
+  theme_publication +
+  theme(legend.position = "none")
+
+# Inverse Simpson
+p4 <- ggplot(alpha_div, aes(x = complex, y = invsimpson, fill = complex)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.2, size = 2, alpha = 0.6) +
+  scale_fill_manual(values = complex_colors) +
+  stat_compare_means(method = "kruskal.test", label.x = 1.5, label.y = max(alpha_div$invsimpson) * 1.1) +
+  stat_compare_means(comparisons = comparisons_complex, method = "wilcox.test", 
+                     label = "p.signif", hide.ns = TRUE) +
+  labs(x = "Complex", y = "Inverse Simpson", title = "Inverse Simpson") +
+  theme_publication +
+  theme(legend.position = "none")
+
+# Chao1
+p5 <- ggplot(alpha_div, aes(x = complex, y = chao1, fill = complex)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.2, size = 2, alpha = 0.6) +
+  scale_fill_manual(values = complex_colors) +
+  stat_compare_means(method = "kruskal.test", label.x = 1.5, label.y = max(alpha_div$chao1) * 1.1) +
+  stat_compare_means(comparisons = comparisons_complex, method = "wilcox.test", 
+                     label = "p.signif", hide.ns = TRUE) +
+  labs(x = "Complex", y = "Chao1 Index", title = "Chao1 Richness") +
+  theme_publication +
+  theme(legend.position = "none")
+
+# Pielou evenness
+p6 <- ggplot(alpha_div, aes(x = complex, y = pielou, fill = complex)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.2, size = 2, alpha = 0.6) +
+  scale_fill_manual(values = complex_colors) +
+  stat_compare_means(method = "kruskal.test", label.x = 1.5, label.y = max(alpha_div$pielou, na.rm = TRUE) * 1.05) +
+  stat_compare_means(comparisons = comparisons_complex, method = "wilcox.test", 
+                     label = "p.signif", hide.ns = TRUE) +
+  labs(x = "Complex", y = "Pielou's Evenness", title = "Pielou Evenness") +
+  theme_publication +
+  theme(legend.position = "none")
+
+# Combine plots
+(p1 | p2 | p3) / (p4 | p5 | p6) +
+  plot_annotation(title = "Alpha Diversity by Diet Complexity",
+                  theme = theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 16)))
+```
+
+#### **Plot alpha diversity by Protease:**
+
+```{r}
+#| label: plot-alpha-protease
+#| fig-width: 12
+#| fig-height: 10
+
+# Observed richness
+p1 <- ggplot(alpha_div, aes(x = protease, y = observed, fill = protease)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.2, size = 2, alpha = 0.6) +
+  scale_fill_manual(values = protease_colors) +
+  stat_compare_means(method = "wilcox.test", label.x = 1.3, label.y = max(alpha_div$observed) * 1.1) +
+  labs(x = "Protease", y = "Observed Species", title = "Observed Richness") +
+  theme_publication +
+  theme(legend.position = "none")
+
+# Shannon
+p2 <- ggplot(alpha_div, aes(x = protease, y = shannon, fill = protease)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.2, size = 2, alpha = 0.6) +
+  scale_fill_manual(values = protease_colors) +
+  stat_compare_means(method = "wilcox.test", label.x = 1.3, label.y = max(alpha_div$shannon) * 1.1) +
+  labs(x = "Protease", y = "Shannon Index", title = "Shannon Diversity") +
+  theme_publication +
+  theme(legend.position = "none")
+
+# Simpson
+p3 <- ggplot(alpha_div, aes(x = protease, y = simpson, fill = protease)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.2, size = 2, alpha = 0.6) +
+  scale_fill_manual(values = protease_colors) +
+  stat_compare_means(method = "wilcox.test", label.x = 1.3, label.y = max(alpha_div$simpson) * 1.05) +
+  labs(x = "Protease", y = "Simpson Index", title = "Simpson Diversity") +
+  theme_publication +
+  theme(legend.position = "none")
+
+# Inverse Simpson
+p4 <- ggplot(alpha_div, aes(x = protease, y = invsimpson, fill = protease)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.2, size = 2, alpha = 0.6) +
+  scale_fill_manual(values = protease_colors) +
+  stat_compare_means(method = "wilcox.test", label.x = 1.3, label.y = max(alpha_div$invsimpson) * 1.1) +
+  labs(x = "Protease", y = "Inverse Simpson", title = "Inverse Simpson") +
+  theme_publication +
+  theme(legend.position = "none")
+
+# Chao1
+p5 <- ggplot(alpha_div, aes(x = protease, y = chao1, fill = protease)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.2, size = 2, alpha = 0.6) +
+  scale_fill_manual(values = protease_colors) +
+  stat_compare_means(method = "wilcox.test", label.x = 1.3, label.y = max(alpha_div$chao1) * 1.1) +
+  labs(x = "Protease", y = "Chao1 Index", title = "Chao1 Richness") +
+  theme_publication +
+  theme(legend.position = "none")
+
+# Pielou evenness
+p6 <- ggplot(alpha_div, aes(x = protease, y = pielou, fill = protease)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.2, size = 2, alpha = 0.6) +
+  scale_fill_manual(values = protease_colors) +
+  stat_compare_means(method = "wilcox.test", label.x = 1.3, label.y = max(alpha_div$pielou, na.rm = TRUE) * 1.05) +
+  labs(x = "Protease", y = "Pielou's Evenness", title = "Pielou Evenness") +
+  theme_publication +
+  theme(legend.position = "none")
+
+# Combine plots
+(p1 | p2 | p3) / (p4 | p5 | p6) +
+  plot_annotation(title = "Alpha Diversity by Protease Treatment",
+                  theme = theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 16)))
+```
+
+#### Interaction plot (Complex x Protease):
+
+```{r}
+#| label: plot-alpha-interaction
+#| fig-width: 14
+#| fig-height: 10
+
+# Shannon by both factors
+p1 <- ggplot(alpha_div, aes(x = complex, y = shannon, fill = protease)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_point(position = position_jitterdodge(jitter.width = 0.2), size = 2, alpha = 0.6) +
+  scale_fill_manual(values = protease_colors) +
+  labs(x = "Complex", y = "Shannon Index", fill = "Protease", title = "Shannon Diversity") +
+  theme_publication
+
+# Observed by both factors
+p2 <- ggplot(alpha_div, aes(x = complex, y = observed, fill = protease)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_point(position = position_jitterdodge(jitter.width = 0.2), size = 2, alpha = 0.6) +
+  scale_fill_manual(values = protease_colors) +
+  labs(x = "Complex", y = "Observed Species", fill = "Protease", title = "Observed Richness") +
+  theme_publication
+
+# Chao1 by both factors
+p3 <- ggplot(alpha_div, aes(x = complex, y = simpson, fill = protease)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_point(position = position_jitterdodge(jitter.width = 0.2), size = 2, alpha = 0.6) +
+  scale_fill_manual(values = protease_colors) +
+  labs(x = "Complex", y = "Simpson Index", fill = "Protease", title = "Simpson Diversity") +
+  theme_publication
+
+# Inverse Simpson by both factors
+p4 <- ggplot(alpha_div, aes(x = complex, y = invsimpson, fill = protease)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_point(position = position_jitterdodge(jitter.width = 0.2), size = 2, alpha = 0.6) +
+  scale_fill_manual(values = protease_colors) +
+  labs(x = "Complex", y = "Inverse Simpson", fill = "Protease", title = "Inverse Simpson") +
+  theme_publication
+
+(p1 | p2) / (p3 | p4) +
+  plot_annotation(title = "Alpha Diversity: Complex × Protease Interaction",
+                  theme = theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 16)))
+```
+
+#### Two-way ANOVA for interaction effects:
+
+Ao comparar os tratamentos usando ANOVA, observamos diferenças significativas, principalmente nos índices de Shannon e Simpson, onde o grupo com protease e dieta complexa apresentou maior diversidade. Porém, quando utilizamos testes não-paramétricos com correção para taxa de falsas descobertas (FDR), os resultados não são significativos. Do ponto de vista estatístico conservador, a conclusão seria que não há diferença significativa. No entanto, a interpretação final depende do contexto biológico e da comparação com outras variáveis do estudo (imunologia, desempenho, etc.).
+
+```{r}
+#| label: two-way-anova
+
+# Two-way ANOVA for Shannon
+anova_shannon <- aov(shannon ~ complex * protease, data = alpha_div)
+summary(anova_shannon)
+
+# Two-way ANOVA for Observed
+anova_observed <- aov(observed ~ complex * protease, data = alpha_div)
+summary(anova_observed)
+
+# Two-way ANOVA for simpson
+anova_simpson <- aov(simpson ~ complex * protease, data = alpha_div)
+summary(anova_simpson)
+
+# Two-way ANOVA for Inverse Simpson
+anova_invsimpson <- aov(invsimpson ~ complex * protease, data = alpha_div)
+summary(anova_invsimpson)
+
+# Summary table of interaction effects
+interaction_pvalues <- data.frame(
+  Metric = c("Shannon", "Observed", "Chao1", "InvSimpson"),
+  Complex_p = c(summary(anova_shannon)[[1]]["complex", "Pr(>F)"],
+                summary(anova_observed)[[1]]["complex", "Pr(>F)"],
+                summary(anova_simpson)[[1]]["complex", "Pr(>F)"],
+                summary(anova_invsimpson)[[1]]["complex", "Pr(>F)"]),
+  Protease_p = c(summary(anova_shannon)[[1]]["protease", "Pr(>F)"],
+                 summary(anova_observed)[[1]]["protease", "Pr(>F)"],
+                 summary(anova_simpson)[[1]]["protease", "Pr(>F)"],
+                 summary(anova_invsimpson)[[1]]["protease", "Pr(>F)"]),
+  Interaction_p = c(summary(anova_shannon)[[1]]["complex:protease", "Pr(>F)"],
+                    summary(anova_observed)[[1]]["complex:protease", "Pr(>F)"],
+                    summary(anova_simpson)[[1]]["complex:protease", "Pr(>F)"],
+                    summary(anova_invsimpson)[[1]]["complex:protease", "Pr(>F)"])
+)
+
+kable(interaction_pvalues, digits = 4, caption = "Two-way ANOVA: Complex × Protease effects on Alpha Diversity")
+```
+
+**Pairwise comparisons for interaction groups:**
+
+```{r}
+#| label: pairwise-interaction-stats
+
+# Pairwise Wilcoxon tests for Shannon
+pairwise_shannon <- pairwise.wilcox.test(alpha_div$shannon, 
+                                          alpha_div$interaction_group,
+                                          p.adjust.method = "BH")
+
+# Pairwise Wilcoxon tests for Observed
+pairwise_observed <- pairwise.wilcox.test(alpha_div$observed, 
+                                           alpha_div$interaction_group,
+                                           p.adjust.method = "BH")
+
+# Pairwise Wilcoxon tests for Simpson
+pairwise_simpson <- pairwise.wilcox.test(alpha_div$simpson, 
+                                        alpha_div$interaction_group,
+                                        p.adjust.method = "BH")
+
+# Pairwise Wilcoxon tests for Inverse Simpson
+pairwise_invsimpson <- pairwise.wilcox.test(alpha_div$invsimpson, 
+                                             alpha_div$interaction_group,
+                                             p.adjust.method = "BH")
+
+# Display results
+kable(round(pairwise_shannon$p.value, 4), caption = "Pairwise Wilcoxon: Shannon (BH adjusted)")
+kable(round(pairwise_observed$p.value, 4), caption = "Pairwise Wilcoxon: Observed (BH adjusted)")
+kable(round(pairwise_simpson$p.value, 4), caption = "Pairwise Wilcoxon: Pairwise_simpson (BH adjusted)")
+kable(round(pairwise_invsimpson$p.value, 4), caption = "Pairwise Wilcoxon: Inverse Simpson (BH adjusted)")
+```
+
+#### **Plot with interaction groups and pairwise p-values:**
+
+```{r}
+#| label: plot-interaction-groups
+#| fig-width: 14
+#| fig-height: 12
+
+alpha_div$interaction_group <- interaction(alpha_div$complex, alpha_div$protease, sep = "_")
+
+# Colors for interaction groups
+interaction_colors <- c(
+  "low_cont" = "#0072B2",
+  "low_prot" = "#56B4E9",
+  "medium_cont" = "#D55E00",
+  "medium_prot" = "#E69F00",
+  "high_cont" = "#009E73",
+  "high_prot" = "#66CC99"
+)
+
+# Shannon
+p1 <- ggplot(alpha_div, aes(x = interaction_group, y = shannon, fill = interaction_group)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.2, size = 2, alpha = 0.6) +
+  scale_fill_manual(values = interaction_colors) +
+  stat_compare_means(method = "kruskal.test", label.y = max(alpha_div$shannon) * 1.15) +
+  labs(x = "Treatment Group", y = "Shannon Index", title = "Shannon Diversity") +
+  theme_publication +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Observed
+p2 <- ggplot(alpha_div, aes(x = interaction_group, y = observed, fill = interaction_group)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.2, size = 2, alpha = 0.6) +
+  scale_fill_manual(values = interaction_colors) +
+  stat_compare_means(method = "kruskal.test", label.y = max(alpha_div$observed) * 1.15) +
+  labs(x = "Treatment Group", y = "Observed Species", title = "Observed Richness") +
+  theme_publication +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Chao1
+p3 <- ggplot(alpha_div, aes(x = interaction_group, y = chao1, fill = interaction_group)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.2, size = 2, alpha = 0.6) +
+  scale_fill_manual(values = interaction_colors) +
+  stat_compare_means(method = "kruskal.test", label.y = max(alpha_div$chao1) * 1.15) +
+  labs(x = "Treatment Group", y = "Chao1 Index", title = "Chao1 Richness") +
+  theme_publication +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Inverse Simpson
+p4 <- ggplot(alpha_div, aes(x = interaction_group, y = invsimpson, fill = interaction_group)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.2, size = 2, alpha = 0.6) +
+  scale_fill_manual(values = interaction_colors) +
+  stat_compare_means(method = "kruskal.test", label.y = max(alpha_div$invsimpson) * 1.15) +
+  labs(x = "Treatment Group", y = "Inverse Simpson", title = "Inverse Simpson") +
+  theme_publication +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 45, hjust = 1))
+
+(p1 | p2) / (p3 | p4) +
+  plot_annotation(title = "Alpha Diversity by Interaction Groups (Complex × Protease)",
+                  theme = theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 16)))
+```
+
+## Beta Diversity Analysis
+
+### Calculate distance matrices:
+
+```{r}
+#| label: beta-distance-matrices
+
+# Transpose matrix (vegan needs samples as rows)
+species_counts_t <- t(species_counts)
+
+# Bray-Curtis distance (abundance-based)
+dist_bray <- vegdist(species_counts_t, method = "bray")
+
+# Jaccard distance (presence/absence)
+dist_jaccard <- vegdist(species_counts_t, method = "jaccard", binary = TRUE)
+
+# Aitchison distance (compositional - recommended for microbiome)
+# Add pseudocount to handle zeros, then CLR transform
+species_pseudo <- species_counts_t + 1
+species_clr <- log(species_pseudo) - rowMeans(log(species_pseudo))
+dist_aitchison <- vegdist(species_clr, method = "euclidean")
+```
+
+#### PERMANOVA - Main effects Complex:
+
+```{r}
+
+# Bray-Curtis PERMANOVA
+set.seed(123)
+permanova_bray_complex <- adonis2(dist_bray ~ complex, 
+                          data = meta_tab, 
+                          permutations = 999)
+
+# Jaccard PERMANOVA
+set.seed(123)
+permanova_jaccard_complex <- adonis2(dist_jaccard ~ complex, 
+                             data = meta_tab, 
+                             permutations = 999)
+
+# Aitchison PERMANOVA
+set.seed(123)
+permanova_aitchison_complex <- adonis2(dist_aitchison ~ complex, 
+                               data = meta_tab, 
+                               permutations = 999)
+
+# Display results
+kable(permanova_bray_complex, digits = 4, caption = "PERMANOVA: Bray-Curtis Distance")
+kable(permanova_jaccard_complex, digits = 4, caption = "PERMANOVA: Jaccard Distance")
+kable(permanova_aitchison_complex, digits = 4, caption = "PERMANOVA: Aitchison Distance")
+```
+
+#### PERMANOVA - Main effects Protease:
+
+```{r}
+# Bray-Curtis PERMANOVA
+set.seed(123)
+permanova_bray_protease <- adonis2(dist_bray ~  protease, 
+                          data = meta_tab, 
+                          permutations = 999)
+
+# Jaccard PERMANOVA
+set.seed(123)
+permanova_jaccard_protease <- adonis2(dist_jaccard ~ protease, 
+                             data = meta_tab, 
+                             permutations = 999)
+
+# Aitchison PERMANOVA
+set.seed(123)
+permanova_aitchison_protease <- adonis2(dist_aitchison ~ protease, 
+                               data = meta_tab, 
+                               permutations = 999)
+
+# Display results
+kable(permanova_bray_protease, digits = 4, caption = "PERMANOVA: Bray-Curtis Distance")
+kable(permanova_jaccard_protease, digits = 4, caption = "PERMANOVA: Jaccard Distance")
+kable(permanova_aitchison_protease, digits = 4, caption = "PERMANOVA: Aitchison Distance")
+```
+
+#### PERMANOVA - Interaction:
+
+```{r}
+#| label: permanova-tests
+
+# Bray-Curtis PERMANOVA
+set.seed(123)
+permanova_bray_interaction <- adonis2(dist_bray ~ complex * protease, 
+                          data = meta_tab, 
+                          permutations = 999)
+
+# Jaccard PERMANOVA
+set.seed(123)
+permanova_jaccard_interaction <- adonis2(dist_jaccard ~ complex * protease, 
+                             data = meta_tab, 
+                             permutations = 999)
+
+# Aitchison PERMANOVA
+set.seed(123)
+permanova_aitchison_interaction <- adonis2(dist_aitchison ~ complex * protease, 
+                               data = meta_tab, 
+                               permutations = 999)
+
+# Display results
+kable(permanova_bray_interaction, digits = 4, caption = "PERMANOVA: Bray-Curtis Distance")
+kable(permanova_jaccard_interaction, digits = 4, caption = "PERMANOVA: Jaccard Distance")
+kable(permanova_aitchison_interaction, digits = 4, caption = "PERMANOVA: Aitchison Distance")
+```
+
+#### **Pairwise PERMANOVA for Complex:**
+
+```{r}
+#| label: pairwise-permanova-complex
+
+# Pairwise PERMANOVA for complex (Bray-Curtis)
+set.seed(123)
+pairwise_complex_bray <- pairwise.adonis(dist_bray, 
+                                          factors = meta_tab$complex,
+                                          p.adjust.m = "BH",
+                                          perm = 999)
+
+# Pairwise PERMANOVA for complex (Jaccard)
+set.seed(123)
+pairwise_complex_jaccard <- pairwise.adonis(dist_jaccard, 
+                                             factors = meta_tab$complex,
+                                             p.adjust.m = "BH",
+                                             perm = 999)
+
+# Pairwise PERMANOVA for complex (Aitchison)
+set.seed(123)
+pairwise_complex_aitchison <- pairwise.adonis(dist_aitchison, 
+                                               factors = meta_tab$complex,
+                                               p.adjust.m = "BH",
+                                               perm = 999)
+
+kable(pairwise_complex_bray, digits = 4, caption = "Pairwise PERMANOVA (Bray-Curtis): Complex")
+kable(pairwise_complex_jaccard, digits = 4, caption = "Pairwise PERMANOVA (Jaccard): Complex")
+kable(pairwise_complex_aitchison, digits = 4, caption = "Pairwise PERMANOVA (Aitchison): Complex")
+```
+
+#### **Pairwise PERMANOVA for Interaction groups:**
+
+Novamente, os resultados não são significativos após correção para FDR, embora sejam significativos considerando apenas o p-valor não ajustado. Esta discrepância é comum em estudos com tamanho amostral limitado e deve ser interpretada com cautela.
+
+```{r}
+#| label: pairwise-permanova-interaction
+
+# Create interaction group
+meta_tab$interaction_group <- interaction(meta_tab$complex, meta_tab$protease, sep = "_")
+
+# Pairwise PERMANOVA for interaction (Bray-Curtis)
+set.seed(123)
+pairwise_interaction_bray <- pairwise.adonis(dist_bray, 
+                                              factors = meta_tab$interaction_group,
+                                              p.adjust.m = "BH",
+                                              perm = 999)
+
+# Pairwise PERMANOVA for interaction (Aitchison)
+set.seed(123)
+pairwise_interaction_aitchison <- pairwise.adonis(dist_aitchison, 
+                                                   factors = meta_tab$interaction_group,
+                                                   p.adjust.m = "BH",
+                                                   perm = 999)
+
+# Pairwise PERMANOVA for interaction (jaccard)
+set.seed(123)
+pairwise_interaction_jaccard <- pairwise.adonis(dist_jaccard, 
+                                                   factors = meta_tab$interaction_group,
+                                                   p.adjust.m = "BH",
+                                                   perm = 999)
+
+kable(pairwise_interaction_bray, digits = 4, caption = "Pairwise PERMANOVA (Bray-Curtis): Interaction Groups")
+kable(pairwise_interaction_aitchison, digits = 4, caption = "Pairwise PERMANOVA (Aitchison): Interaction Groups")
+kable(pairwise_interaction_jaccard, digits = 4, caption = "Pairwise PERMANOVA (Jaccard): Interaction Groups")
+```
+
+#### **Betadisper - Test for homogeneity of dispersions:**
+
+```{r}
+#| label: betadisper
+
+# Betadisper for Complex (Bray-Curtis)
+betadisp_complex_bray <- betadisper(dist_bray, meta_tab$complex)
+permutest_complex_bray <- permutest(betadisp_complex_bray, pairwise = TRUE, permutations = 999)
+
+# Betadisper for Protease (Bray-Curtis)
+betadisp_protease_bray <- betadisper(dist_bray, meta_tab$protease)
+permutest_protease_bray <- permutest(betadisp_protease_bray, pairwise = TRUE, permutations = 999)
+
+# Betadisper for Interaction (Bray-Curtis)
+betadisp_interaction_bray <- betadisper(dist_bray, meta_tab$interaction_group)
+permutest_interaction_bray <- permutest(betadisp_interaction_bray, pairwise = TRUE, permutations = 999)
+
+# Display results
+print("Betadisper - Complex (Bray-Curtis):")
+permutest_complex_bray
+
+print("Betadisper - Protease (Bray-Curtis):")
+permutest_protease_bray
+
+print("Betadisper - Interaction (Bray-Curtis):")
+permutest_interaction_bray
+```
+
+#### PCoA ordination:
+
+```{r}
+#| label: pcoa-ordination
+
+# PCoA on Bray-Curtis
+pcoa_bray <- cmdscale(dist_bray, k = 3, eig = TRUE)
+
+# Calculate variance explained
+var_explained_bray <- round(pcoa_bray$eig / sum(pcoa_bray$eig) * 100, 2)
+
+# Create data frame for plotting
+pcoa_bray_df <- data.frame(
+  sample = rownames(pcoa_bray$points),
+  PC1 = pcoa_bray$points[, 1],
+  PC2 = pcoa_bray$points[, 2],
+  PC3 = pcoa_bray$points[, 3]
+)
+pcoa_bray_df <- merge(pcoa_bray_df, meta_tab, by.x = "sample", by.y = "row.names")
+
+# PCoA on Aitchison
+pcoa_aitchison <- cmdscale(dist_aitchison, k = 3, eig = TRUE)
+var_explained_aitchison <- round(pcoa_aitchison$eig / sum(pcoa_aitchison$eig) * 100, 2)
+
+pcoa_aitchison_df <- data.frame(
+  sample = rownames(pcoa_aitchison$points),
+  PC1 = pcoa_aitchison$points[, 1],
+  PC2 = pcoa_aitchison$points[, 2],
+  PC3 = pcoa_aitchison$points[, 3]
+)
+pcoa_aitchison_df <- merge(pcoa_aitchison_df, meta_tab, by.x = "sample", by.y = "row.names")
+```
+
+#### PCoA plot by Complex:
+
+```{r}
+#| label: pcoa-plot-complex
+#| fig-width: 14
+#| fig-height: 6
+
+# Extract PERMANOVA stats for annotation
+r2_complex_bray <- round(permanova_bray_complex["Model", "R2"], 3)
+p_complex_bray <- permanova_bray_complex["Model", "Pr(>F)"]
+p_label_bray <- ifelse(p_complex_bray < 0.001, "p < 0.001", paste0("p = ", round(p_complex_bray, 3)))
+
+r2_complex_aitchison <- round(permanova_aitchison_complex["Model", "R2"], 3)
+p_complex_aitchison <- permanova_aitchison_complex["Model", "Pr(>F)"]
+p_label_aitchison <- ifelse(p_complex_aitchison < 0.001, "p < 0.001", paste0("p = ", round(p_complex_aitchison, 3)))
+
+# Bray-Curtis PCoA
+p1 <- ggplot(pcoa_bray_df, aes(x = PC1, y = PC2, color = complex, shape = complex)) +
+  geom_point(size = 4, alpha = 0.8) +
+  stat_ellipse(level = 0.95, linetype = "dashed", linewidth = 1) +
+  scale_color_manual(values = complex_colors) +
+  labs(
+    x = paste0("PCoA1 (", var_explained_bray[1], "%)"),
+    y = paste0("PCoA2 (", var_explained_bray[2], "%)"),
+    color = "Complex",
+    shape = "Complex",
+    title = "Bray-Curtis Distance"
+  ) +
+  annotate("text", x = Inf, y = Inf, 
+           label = paste0("R² = ", r2_complex_bray, "\n", p_label_bray),
+           hjust = 1.1, vjust = 1.5, size = 4, fontface = "bold") +
+  theme_publication
+
+# Aitchison PCoA
+p2 <- ggplot(pcoa_aitchison_df, aes(x = PC1, y = PC2, color = complex, shape = complex)) +
+  geom_point(size = 4, alpha = 0.8) +
+  stat_ellipse(level = 0.95, linetype = "dashed", linewidth = 1) +
+  scale_color_manual(values = complex_colors) +
+  labs(
+    x = paste0("PCoA1 (", var_explained_aitchison[1], "%)"),
+    y = paste0("PCoA2 (", var_explained_aitchison[2], "%)"),
+    color = "Complex",
+    shape = "Complex",
+    title = "Aitchison Distance"
+  ) +
+  annotate("text", x = Inf, y = Inf, 
+           label = paste0("R² = ", r2_complex_aitchison, "\n", p_label_aitchison),
+           hjust = 1.1, vjust = 1.5, size = 4, fontface = "bold") +
+  theme_publication
+
+p1 + p2 +
+  plot_annotation(title = "PCoA: Beta Diversity by Diet Complexity",
+                  theme = theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 16)))
+```
+
+#### PCoA plot by Protease:
+
+```{r}
+#| label: pcoa-plot-protease
+#| fig-width: 14
+#| fig-height: 6
+
+# Extract PERMANOVA stats
+r2_protease_bray <- round(permanova_bray_protease["Model", "R2"], 3)
+p_protease_bray <- permanova_bray_protease["Model", "Pr(>F)"]
+p_label_bray <- ifelse(p_protease_bray < 0.001, "p < 0.001", paste0("p = ", round(p_protease_bray, 3)))
+
+r2_protease_aitchison <- round(permanova_aitchison_protease["Model", "R2"], 3)
+p_protease_aitchison <- permanova_aitchison_protease["Model", "Pr(>F)"]
+p_label_aitchison <- ifelse(p_protease_aitchison < 0.001, "p < 0.001", paste0("p = ", round(p_protease_aitchison, 3)))
+
+# Bray-Curtis PCoA
+p1 <- ggplot(pcoa_bray_df, aes(x = PC1, y = PC2, color = protease, shape = protease)) +
+  geom_point(size = 4, alpha = 0.8) +
+  stat_ellipse(level = 0.95, linetype = "dashed", linewidth = 1) +
+  scale_color_manual(values = protease_colors) +
+  labs(
+    x = paste0("PC1 (", var_explained_bray[1], "%)"),
+    y = paste0("PC2 (", var_explained_bray[2], "%)"),
+    color = "Protease",
+    shape = "Protease",
+    title = "Bray-Curtis Distance"
+  ) +
+  annotate("text", x = Inf, y = Inf, 
+           label = paste0("R² = ", r2_protease_bray, "\n", p_label_bray),
+           hjust = 1.1, vjust = 1.5, size = 4, fontface = "bold") +
+  theme_publication
+
+# Aitchison PCoA
+p2 <- ggplot(pcoa_aitchison_df, aes(x = PC1, y = PC2, color = protease, shape = protease)) +
+  geom_point(size = 4, alpha = 0.8) +
+  stat_ellipse(level = 0.95, linetype = "dashed", linewidth = 1) +
+  scale_color_manual(values = protease_colors) +
+  labs(
+    x = paste0("PC1 (", var_explained_aitchison[1], "%)"),
+    y = paste0("PC2 (", var_explained_aitchison[2], "%)"),
+    color = "Protease",
+    shape = "Protease",
+    title = "Aitchison Distance"
+  ) +
+  annotate("text", x = Inf, y = Inf, 
+           label = paste0("R² = ", r2_protease_aitchison, "\n", p_label_aitchison),
+           hjust = 1.1, vjust = 1.5, size = 4, fontface = "bold") +
+  theme_publication
+
+p1 + p2 +
+  plot_annotation(title = "PCoA: Beta Diversity by Protease Treatment",
+                  theme = theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 16)))
+```
+
+#### PCoA plot by Interaction (Complex x Protease):
+
+```{r}
+#| label: pcoa-plot-interaction
+#| fig-width: 14
+#| fig-height: 6
+
+# Extract interaction PERMANOVA stats
+r2_interaction_bray <- round(permanova_bray_interaction["Model", "R2"], 3)
+p_interaction_bray <- permanova_bray_interaction["Model", "Pr(>F)"]
+p_label_bray <- ifelse(p_interaction_bray < 0.001, "p < 0.001", paste0("p = ", round(p_interaction_bray, 3)))
+
+r2_interaction_aitchison <- round(permanova_aitchison_interaction["Model", "R2"], 3)
+p_interaction_aitchison <- permanova_aitchison_interaction["Model", "Pr(>F)"]
+p_label_aitchison <- ifelse(p_interaction_aitchison < 0.001, "p < 0.001", paste0("p = ", round(p_interaction_aitchison, 3)))
+
+# Colors for interaction groups
+interaction_colors <- c(
+  "low_cont" = "#0072B2",
+  "low_prot" = "#56B4E9",
+  "medium_cont" = "#D55E00",
+  "medium_prot" = "#E69F00",
+  "high_cont" = "#009E73",
+  "high_prot" = "#66CC99"
+)
+
+# Create interaction variable in pcoa dataframes
+pcoa_bray_df$interaction_group <- interaction(pcoa_bray_df$complex, pcoa_bray_df$protease, sep = "_")
+pcoa_aitchison_df$interaction_group <- interaction(pcoa_aitchison_df$complex, pcoa_aitchison_df$protease, sep = "_")
+
+# Bray-Curtis PCoA
+p1 <- ggplot(pcoa_bray_df, aes(x = PC1, y = PC2, color = interaction_group, shape = complex)) +
+  geom_point(size = 4, alpha = 0.8) +
+  stat_ellipse(aes(group = interaction_group), level = 0.95, linetype = "dashed", linewidth = 1) +
+  scale_color_manual(values = interaction_colors) +
+  labs(
+    x = paste0("PC1 (", var_explained_bray[1], "%)"),
+    y = paste0("PC2 (", var_explained_bray[2], "%)"),
+    color = "Interaction",
+    shape = "Complex",
+    title = "Bray-Curtis Distance"
+  ) +
+  annotate("text", x = Inf, y = Inf, 
+           label = paste0("Interaction R² = ", r2_interaction_bray, "\n", p_label_bray),
+           hjust = 1.1, vjust = 1.5, size = 4, fontface = "bold") +
+  theme_publication
+
+# Aitchison PCoA
+p2 <- ggplot(pcoa_aitchison_df, aes(x = PC1, y = PC2, color = interaction_group, shape = complex)) +
+  geom_point(size = 4, alpha = 0.8) +
+  stat_ellipse(aes(group = interaction_group), level = 0.95, linetype = "dashed", linewidth = 1) +
+  scale_color_manual(values = interaction_colors) +
+  labs(
+    x = paste0("PC1 (", var_explained_aitchison[1], "%)"),
+    y = paste0("PC2 (", var_explained_aitchison[2], "%)"),
+    color = "Interaction",
+    shape = "Complex",
+    title = "Aitchison Distance"
+  ) +
+  annotate("text", x = Inf, y = Inf, 
+           label = paste0("Interaction R² = ", r2_interaction_aitchison, "\n", p_label_aitchison),
+           hjust = 1.1, vjust = 1.5, size = 4, fontface = "bold") +
+  theme_publication
+
+p1 + p2 +
+  plot_annotation(title = "PCoA: Beta Diversity by Interaction Groups (Complex × Protease)",
+                  theme = theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 16)))
+
+```
+
+#### Combined PCoA plot (all factors in one figure):
+
+```{r}
+#| label: pcoa-combined
+#| fig-width: 10
+#| fig-height: 10
+
+# Combined plot with color = complex, shape = protease
+p_combined <- ggplot(pcoa_bray_df, aes(x = PC1, y = PC2, color = complex, shape = protease)) +
+  geom_point(size = 5, alpha = 0.8) +
+  stat_ellipse(aes(group = complex, linetype = complex), level = 0.95, linewidth = 1) +
+  scale_color_manual(values = complex_colors) +
+  scale_shape_manual(values = c("cont" = 16, "prot" = 17)) +
+  labs(
+    x = paste0("PC1 (", var_explained_bray[1], "%)"),
+    y = paste0("PC2 (", var_explained_bray[2], "%)"),
+    color = "Complex",
+    shape = "Protease",
+    linetype = "Complex",
+    title = "PCoA: Bray-Curtis Distance",
+    subtitle = paste0("Complex: R² = ", r2_complex_bray, ", ", 
+                      ifelse(p_complex_bray < 0.001, "p < 0.001", paste0("p = ", round(p_complex_bray, 3))),
+                      " | Protease: R² = ", r2_protease_bray, ", ",
+                      ifelse(p_protease_bray < 0.001, "p < 0.001", paste0("p = ", round(p_protease_bray, 3))))
+  ) +
+  theme_publication +
+  theme(
+    plot.subtitle = element_text(hjust = 0.5, size = 10),
+    legend.position = "right"
+  )
+
+p_combined
+```
+
+#### Summary table of PERMANOVA results:
+
+```{r}
+#| label: permanova-summary
+
+# Create summary table
+permanova_summary <- data.frame(
+  Distance = rep(c("Bray-Curtis", "Jaccard", "Aitchison"), each = 3),
+  Factor = rep(c("Complex", "Protease", "Complex:Protease"), 3),
+  R2 = c(
+    permanova_bray_complex["Model", "R2"],
+    permanova_bray_protease["Model", "R2"],
+    permanova_bray_interaction["Model", "R2"],
+    permanova_jaccard_complex["Model", "R2"],
+    permanova_jaccard_protease["Model", "R2"],
+    permanova_jaccard_interaction["Model", "R2"],
+    permanova_aitchison_complex["Model", "R2"],
+    permanova_aitchison_protease["Model", "R2"],
+    permanova_aitchison_interaction["Model", "R2"]
+  ),
+  p_value = c(
+    permanova_bray_complex["Model", "Pr(>F)"],
+    permanova_bray_protease["Model", "Pr(>F)"],
+    permanova_bray_interaction["Model", "Pr(>F)"],
+    permanova_jaccard_complex["Model", "Pr(>F)"],
+    permanova_jaccard_protease["Model", "Pr(>F)"],
+    permanova_jaccard_interaction["Model", "Pr(>F)"],
+    permanova_aitchison_complex["Model", "Pr(>F)"],
+    permanova_aitchison_protease["Model", "Pr(>F)"],
+    permanova_aitchison_interaction["Model", "Pr(>F)"]
+  )
+)
+
+permanova_summary$significance <- ifelse(permanova_summary$p_value < 0.001, "***",
+                                  ifelse(permanova_summary$p_value < 0.01, "**",
+                                  ifelse(permanova_summary$p_value < 0.05, "*", "ns")))
+
+kable(permanova_summary, digits = 4, caption = "PERMANOVA Summary: All Distance Metrics")
+```
+
+## Differential Abundance Analysis
+
+### Prepare data for differential abundance:
+
+```{r}
+#| label: prepare-da-data
+
+# ALDEx2 and ANCOM-BC need taxa as rows and samples as columns
+# species_counts is already in this format
+
+# Filter low-prevalence taxa (present in at least 10% of samples)
+prevalence <- rowSums(species_counts > 0) / ncol(species_counts)
+species_counts_filtered <- species_counts[prevalence >= 0.10, ]
+
+
+# Check dimensions
+dim(species_counts_filtered)
+
+# Verify sample order matches metadata
+all(colnames(species_counts_filtered) == rownames(meta_tab))
+```
+
+### ALDEx2 Analysis
+
+#### ALDEx2 for Complex factor:
+
+```{r}
+#| label: aldex2-complex
+
+# ALDEx2 requires character or factor for conditions
+# For 3-level factor, use aldex.kw (Kruskal-Wallis)
+meta_tab$complex <- as.character(meta_tab$complex)
+set.seed(123)
+aldex_complex <- aldex.clr(species_counts_filtered, 
+                            meta_tab$complex, 
+                            mc.samples = 128, 
+                            denom = "all",
+                            verbose = FALSE)
+
+# Kruskal-Wallis test for 3 groups
+aldex_complex_kw <- aldex.kw(aldex_complex)
+
+# Add taxon names
+aldex_complex_kw$taxon <- rownames(aldex_complex_kw)
+
+# Filter significant results (using glm.eBH for FDR-corrected p-values)
+aldex_complex_sig <- aldex_complex_kw[aldex_complex_kw$kw.eBH < 0.05, ]
+
+# Sort by p-value
+aldex_complex_sig <- aldex_complex_sig[order(aldex_complex_sig$kw.eBH), ]
+
+# Display results
+nrow(aldex_complex_sig)
+kable(head(aldex_complex_sig, 20), digits = 4, 
+      caption = "ALDEx2: Significant taxa by Complex (KW test, BH adjusted p < 0.05)")
+```
+
+#### ALDEx2 for Protease factor:
+
+```{r}
+#| label: aldex2-protease
+
+# For 2-level factor, use aldex.ttest (Welch's t-test and Wilcoxon)
+meta_tab$protease <- as.character(meta_tab$protease)
+set.seed(123)
+aldex_protease <- aldex.clr(species_counts_filtered, 
+                             meta_tab$protease, 
+                             mc.samples = 128, 
+                             denom = "all",
+                             verbose = FALSE)
+
+# t-test and Wilcoxon test
+aldex_protease_tt <- aldex.ttest(aldex_protease)
+
+# Effect size
+aldex_protease_effect <- aldex.effect(aldex_protease)
+
+# Combine results
+aldex_protease_all <- data.frame(aldex_protease_tt, aldex_protease_effect)
+aldex_protease_all$taxon <- rownames(aldex_protease_all)
+
+# Filter significant results (Wilcoxon BH-adjusted)
+aldex_protease_sig <- aldex_protease_all[aldex_protease_all$wi.eBH < 0.05, ]
+
+# Sort by effect size
+aldex_protease_sig <- aldex_protease_sig[order(abs(aldex_protease_sig$effect), decreasing = TRUE), ]
+
+nrow(aldex_protease_sig)
+kable(head(aldex_protease_sig[, c("taxon", "wi.eBH", "effect", "overlap")], 20), digits = 4,
+      caption = "ALDEx2: Significant taxa by Protease (Wilcoxon, BH adjusted p < 0.05)")
+
+```
+
+#### **ALDEx2 Effect Size Plot - Protease:**
+
+```{r}
+#| label: aldex2-effect-plot-protease
+#| fig-width: 10
+#| fig-height: 8
+
+# Prepare data for plotting
+aldex_protease_all$significant <- ifelse(aldex_protease_all$wi.eBH < 0.05, "Significant", "Not Significant")
+aldex_protease_all$direction <- ifelse(aldex_protease_all$effect > 0, "Higher in prot", "Higher in cont")
+
+# MA plot (Bland-Altman)
+p1 <- ggplot(aldex_protease_all, aes(x = rab.all, y = diff.btw, color = significant)) +
+  geom_point(alpha = 0.5, size = 2) +
+  scale_color_manual(values = c("Significant" = "#D55E00", "Not Significant" = "grey70")) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  labs(
+    x = "Mean CLR abundance",
+    y = "Difference between groups",
+    color = "",
+    title = "MA Plot: Protease Effect"
+  ) +
+  theme_publication
+
+# Effect size plot
+p2 <- ggplot(aldex_protease_all, aes(x = diff.btw, y = -log10(wi.eBH), color = significant)) +
+  geom_point(alpha = 0.5, size = 2) +
+  scale_color_manual(values = c("Significant" = "#D55E00", "Not Significant" = "grey70")) +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "red") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "black") +
+  labs(
+    x = "Difference between groups (CLR)",
+    y = "-log10(BH adjusted p-value)",
+    color = "",
+    title = "Volcano Plot: Protease Effect"
+  ) +
+  theme_publication
+
+p1 + p2 +
+  plot_annotation(title = "ALDEx2: Protease Differential Abundance",
+                  theme = theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 16)))
+```
+
+#### **ALDEx2 for Interaction (using glm):**
+
+Os resultados abaixo mostra a mesma coisa, não foi segnificativo para quando ajusta para FDR mas tem varios taxons que foi significativo. Isso é um conceito importante pq mudar o seu resultado completamente. Da uma lida nesse documento <https://totallab.com/resources/p-values-fdr-q-values/>
+
+```{r}
+#| label: aldex2-interaction
+
+# Create model matrix for interaction
+meta_tab$complex <- factor(meta_tab$complex, levels = c("low", "medium", "high"))
+meta_tab$protease <- factor(meta_tab$protease, levels = c("cont", "prot"))
+
+mm <- model.matrix(~ complex * protease, data = meta_tab)
+
+set.seed(123)
+aldex_interaction <- aldex.clr(species_counts_filtered, 
+                                mm, 
+                                mc.samples = 128, 
+                                denom = "all",
+                                verbose = FALSE)
+
+# GLM test
+aldex_interaction_glm <- aldex.glm(aldex_interaction, mm)
+
+# Extract interaction term results
+interaction_cols <- grep("complex.*protease", colnames(aldex_interaction_glm), value = TRUE)
+
+# Get p-values for interaction terms
+aldex_interaction_results <- aldex_interaction_glm[, c(interaction_cols)]
+aldex_interaction_results$taxon <- rownames(aldex_interaction_results)
+
+# Find significant interactions (any interaction term)
+pval_cols <- grep("pval.eBH", interaction_cols, value = TRUE)
+
+if (length(pval_cols) > 0) {
+  aldex_interaction_results$min_pval <- apply(aldex_interaction_results[, pval_cols, drop = FALSE], 1, min, na.rm = TRUE)
+  aldex_interaction_sig <- aldex_interaction_results[aldex_interaction_results$min_pval < 0.05, ]
+  aldex_interaction_sig <- aldex_interaction_sig[order(aldex_interaction_sig$min_pval), ]
+  
+  nrow(aldex_interaction_sig)
+  kable(head(aldex_interaction_sig, 20), digits = 4,
+        caption = "ALDEx2: Significant taxa with Complex × Protease interaction (BH adjusted p < 0.05)")
+}
+```
+
+### ANCOM-BC Analysis
+
+Nesta seção utilizamos o ANCOM-BC, outro método para identificar diferenças na abundância entre espécies. Este método também não encontrou resultados significativos após ajuste para FDR. No entanto, no heatmap final incluímos os táxons que apresentaram p-valor significativo (antes da correção) para a interação entre os fatores. Vale a pena explorar esses resultados para identificar táxons de interesse biológico para o estudo.
+
+### Create phyloseq object for ANCOM-BC:
+
+#### Remove zero-variance taxa before ANCOM-BC:
+
+```{r}
+#| label: filter-for-interaction
+
+# Create interaction group
+meta_tab$interaction_group <- interaction(meta_tab$complex, meta_tab$protease, sep = "_")
+
+# Check how many samples per interaction group
+table(meta_tab$interaction_group)
+
+# Function to identify problematic taxa
+find_zero_variance_taxa <- function(counts_mat, group_var) {
+  problem_taxa <- c()
+  
+  for (taxon in rownames(counts_mat)) {
+    counts <- as.numeric(counts_mat[taxon, ])
+    
+    for (grp in unique(group_var)) {
+      grp_counts <- counts[group_var == grp]
+      
+      # Check if all values are the same (zero variance)
+      if (length(unique(grp_counts)) == 1) {
+        problem_taxa <- c(problem_taxa, taxon)
+        break
+      }
+    }
+  }
+  
+  return(unique(problem_taxa))
+}
+
+# Find problematic taxa for interaction groups
+problem_taxa <- find_zero_variance_taxa(species_counts_filtered, meta_tab$interaction_group)
+
+length(problem_taxa)
+
+# Remove problematic taxa
+species_counts_interaction <- species_counts_filtered[!rownames(species_counts_filtered) %in% problem_taxa, ]
+
+dim(species_counts_interaction)
+
+#| label: filter-min-counts-per-group
+
+# For each taxon, require at least 2 non-zero values in each interaction group
+keep_taxa <- apply(species_counts_interaction, 1, function(x) {
+  counts <- as.numeric(x)
+  
+  all_groups_ok <- TRUE
+  for (grp in unique(meta_tab$interaction_group)) {
+    grp_counts <- counts[meta_tab$interaction_group == grp]
+    
+    # Require at least 2 non-zero values AND variance > 0
+    n_nonzero <- sum(grp_counts > 0)
+    has_variance <- var(grp_counts) > 0
+    
+    if (n_nonzero < 2 | !has_variance) {
+      all_groups_ok <- FALSE
+      break
+    }
+  }
+  
+  return(all_groups_ok)
+})
+
+species_counts_interaction <- species_counts_interaction[keep_taxa, ]
+
+dim(species_counts_interaction)
+
+#| label: create-ps-interaction
+
+# Create phyloseq object with filtered data
+otu_interaction <- otu_table(species_counts_interaction, taxa_are_rows = TRUE)
+sample_interaction <- sample_data(meta_tab)
+
+ps <- phyloseq(otu_interaction, sample_interaction)
+
+ps
+```
+
+#### ANCOM-BC for Complex factor
+
+```{r}
+#| label: ancombc-complex-v2
+
+set.seed(123)
+ancom_complex <- ancombc2(
+  data = ps,
+  fix_formula = "complex",
+  p_adj_method = "BH",
+  prv_cut = 0.10,
+  lib_cut = 1000,
+  group = "complex",
+  struc_zero = FALSE,
+  neg_lb = FALSE,
+  alpha = 0.05,
+  global = TRUE,
+  pairwise = TRUE,
+  dunnet = FALSE,
+  trend = FALSE,
+  verbose = FALSE
+)
+
+# Extract results
+ancom_complex_res <- ancom_complex$res
+
+# Filter significant (q < 0.05 for any comparison)
+ancom_complex_sig <- ancom_complex_res %>%
+  filter(q_complexmedium < 0.05 | q_complexhigh < 0.05)
+
+nrow(ancom_complex_sig)
+kable(head(ancom_complex_sig[, c("taxon", "lfc_complexmedium", "lfc_complexhigh", 
+                                  "q_complexmedium", "q_complexhigh")], 20), 
+      digits = 4,
+      caption = "ANCOM-BC: Significant taxa by Complex (BH adjusted q < 0.05)")
+```
+
+#### ANCOM-BC for Protease factor:
+
+```{r}
+#| label: ancombc-protease-v2
+
+set.seed(123)
+ancom_protease <- ancombc2(
+  data = ps,
+  fix_formula = "protease",
+  p_adj_method = "BH",
+  prv_cut = 0.10,
+  lib_cut = 1000,
+  group = NULL,
+  struc_zero = FALSE,
+  neg_lb = FALSE,
+  alpha = 0.05,
+  global = FALSE,
+  pairwise = FALSE,
+  dunnet = FALSE,
+  trend = FALSE,
+  verbose = FALSE
+)
+
+# Extract results
+ancom_protease_res <- ancom_protease$res
+
+# Filter significant
+ancom_protease_sig <- ancom_protease_res %>%
+  filter(q_proteaseprot < 0.05)
+
+# Sort by log fold change
+ancom_protease_sig <- ancom_protease_sig[order(abs(ancom_protease_sig$lfc_proteaseprot), decreasing = TRUE), ]
+
+nrow(ancom_protease_sig)
+kable(head(ancom_protease_sig[, c("taxon", "lfc_proteaseprot", "se_proteaseprot", 
+                                   "q_proteaseprot")], 20), 
+      digits = 4,
+      caption = "ANCOM-BC: Significant taxa by Protease (BH adjusted q < 0.05)")
+```
+
+#### ANCOM-BC for Interaction:
+
+```{r}
+#| label: ancombc-interaction-v2
+
+set.seed(123)
+ancom_interaction <- ancombc2(
+  data = ps,
+  fix_formula = "complex * protease",
+  p_adj_method = "BH",
+  prv_cut = 0.10,
+  lib_cut = 1000,
+  group = NULL,
+  struc_zero = FALSE,
+  neg_lb = FALSE,
+  alpha = 0.05,
+  global = FALSE,
+  pairwise = FALSE,
+  dunnet = FALSE,
+  trend = FALSE,
+  verbose = FALSE
+)
+
+# Extract results
+ancom_interaction_res <- ancom_interaction$res
+
+# Check column names for interaction terms
+colnames(ancom_interaction_res)
+
+
+# Filter for significant interaction terms
+ancom_interaction_sig <- ancom_interaction_res %>%
+  filter(`p_complexmedium:proteaseprot` < 0.05 | `p_complexhigh:proteaseprot` < 0.10)
+
+nrow(ancom_interaction_sig)
+
+# Display significant interactions
+kable(ancom_interaction_sig[, c("taxon", 
+                                 "lfc_complexmedium:proteaseprot", 
+                                 "lfc_complexhigh:proteaseprot",
+                                 "q_complexmedium:proteaseprot", 
+                                 "q_complexhigh:proteaseprot",
+                                 "passed_ss_complexmedium:proteaseprot",
+                                 "passed_ss_complexhigh:proteaseprot")], 
+      digits = 4,
+      caption = "ANCOM-BC: Significant Complex × Protease interactions (q < 0.05)")
+
+```
+
+#### Volcano plot for interaction terms:
+
+```{r}
+#| label: volcano-interaction
+#| fig-width: 14
+#| fig-height: 6
+
+# Medium:Protease interaction
+ancom_interaction_res$sig_med_int <- ifelse(
+  ancom_interaction_res$`p_complexmedium:proteaseprot` < 0.05, 
+  "Significant", "Not Significant"
+)
+
+p1 <- ggplot(ancom_interaction_res, 
+             aes(x = `lfc_complexmedium:proteaseprot`, 
+                 y = -log10(`p_complexmedium:proteaseprot`), 
+                 color = sig_med_int)) +
+  geom_point(alpha = 0.6, size = 2) +
+  scale_color_manual(values = c("Significant" = "#D55E00", "Not Significant" = "grey70")) +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "red") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "black") +
+  labs(
+    x = "Log Fold Change",
+    y = "-log10(p-value)",
+    color = "",
+    title = "Medium × Protease Interaction"
+  ) +
+  theme_publication +
+  theme(legend.position = "bottom")
+
+# High:Protease interaction
+ancom_interaction_res$sig_high_int <- ifelse(
+  ancom_interaction_res$`p_complexhigh:proteaseprot` < 0.05, 
+  "Significant", "Not Significant"
+)
+
+p2 <- ggplot(ancom_interaction_res, 
+             aes(x = `lfc_complexhigh:proteaseprot`, 
+                 y = -log10(`p_complexhigh:proteaseprot`), 
+                 color = sig_high_int)) +
+  geom_point(alpha = 0.6, size = 2) +
+  scale_color_manual(values = c("Significant" = "#009E73", "Not Significant" = "grey70")) +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "red") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "black") +
+  labs(
+    x = "Log Fold Change",
+    y = "-log10(p-value)",
+    color = "",
+    title = "High × Protease Interaction"
+  ) +
+  theme_publication +
+  theme(legend.position = "bottom")
+
+p1 + p2 +
+  plot_annotation(title = "ANCOM-BC: Complex × Protease Interaction Effects",
+                  theme = theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 16)))
+```
+
+#### Heatmap of significant interaction taxa:
+
+```{r}
+#| label: heatmap-interaction-grouped
+#| fig-width: 12
+#| fig-height: 10
+
+# Get taxa with significant interactions
+interaction_taxa <- ancom_interaction_res %>%
+  filter(`p_complexmedium:proteaseprot` < 0.05 | `p_complexhigh:proteaseprot` < 0.05) %>%
+  pull(taxon)
+
+if (length(interaction_taxa) > 0) {
+  
+  # Get CLR-transformed abundances
+  species_pseudo <- species_counts_filtered[interaction_taxa, , drop = FALSE] + 1
+  species_clr <- log(species_pseudo) - rowMeans(log(species_pseudo))
+  
+  # Order samples by Complex (and then by Protease within Complex)
+  sample_order <- rownames(meta_tab)[order(meta_tab$complex, meta_tab$protease)]
+  
+  # Reorder the CLR matrix columns
+  species_clr_ordered <- species_clr[, sample_order]
+  
+  # Create annotation with ordered samples
+  annotation_col <- data.frame(
+    Complex = meta_tab[sample_order, "complex"],
+    Protease = meta_tab[sample_order, "protease"],
+    row.names = sample_order
+  )
+  
+  annotation_colors <- list(
+    Complex = complex_colors,
+    Protease = protease_colors
+  )
+  
+  # Add gaps between Complex groups
+  # Find positions where Complex changes
+  complex_ordered <- meta_tab[sample_order, "complex"]
+  gaps_col <- which(complex_ordered[-1] != complex_ordered[-length(complex_ordered)])
+  
+  # Plot heatmap
+  pheatmap(
+    species_clr_ordered,
+    scale = "row",
+    cluster_rows = TRUE,
+    cluster_cols = FALSE,
+    clustering_distance_rows = "euclidean",
+    clustering_method = "ward.D2",
+    annotation_col = annotation_col,
+    annotation_colors = annotation_colors,
+    show_colnames = FALSE,
+    gaps_col = gaps_col,
+    color = colorRampPalette(c("#0072B2", "white", "#D55E00"))(100),
+    fontsize_row = 8,
+    fontsize_col = 8,
+    main = "Taxa with Significant Complex × Protease Interaction"
+  )
+} else {
+  print("No taxa with significant interaction effects")
+}
+```
+
+#### **ANCOM-BC Volcano Plot - Protease:**
+
+```{r}
+#| label: ancombc-volcano-protease
+#| fig-width: 10
+#| fig-height: 8
+
+# Prepare data
+ancom_protease_res$significant <- ifelse(ancom_protease_res$diff_proteaseprot == TRUE, 
+                                          "Significant", "Not Significant")
+ancom_protease_res$direction <- ifelse(ancom_protease_res$lfc_proteaseprot > 0, 
+                                        "Higher in prot", "Higher in cont")
+
+# Volcano plot
+p_volcano <- ggplot(ancom_protease_res, aes(x = lfc_proteaseprot, y = -log10(q_proteaseprot), 
+                                             color = significant)) +
+  geom_point(alpha = 0.6, size = 2) +
+  scale_color_manual(values = c("Significant" = "#D55E00", "Not Significant" = "grey70")) +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "red") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "black") +
+  labs(
+    x = "Log Fold Change (prot vs cont)",
+    y = "-log10(q-value)",
+    color = "",
+    title = "ANCOM-BC: Protease Effect"
+  ) +
+  theme_publication
+
+# Add labels for top significant taxa
+if (nrow(ancom_protease_sig) > 0) {
+  top_taxa <- head(ancom_protease_sig, 10)
+  p_volcano <- p_volcano +
+    geom_text_repel(data = ancom_protease_res[ancom_protease_res$taxon %in% top_taxa$taxon, ],
+                    aes(label = taxon),
+                    size = 3, max.overlaps = 15,
+                    box.padding = 0.5)
+}
+
+p_volcano
+
+```
+
+#### ANCOM-BC Volcano Plot-Complex
+
+```{r}
+#| label: ancombc-volcano-complex
+#| fig-width: 14
+#| fig-height: 8
+
+# Medium vs Low
+ancom_complex_res$sig_medium <- ifelse(ancom_complex_res$q_complexmedium < 0.05, 
+                                        "Significant", "Not Significant")
+
+p1 <- ggplot(ancom_complex_res, aes(x = lfc_complexmedium, y = -log10(q_complexmedium), 
+                                     color = sig_medium)) +
+  geom_point(alpha = 0.6, size = 2) +
+  scale_color_manual(values = c("Significant" = "#E69F00", "Not Significant" = "grey70")) +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "red") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "black") +
+  labs(
+    x = "Log Fold Change (medium vs low)",
+    y = "-log10(q-value)",
+    color = "",
+    title = "Medium vs Low"
+  ) +
+  theme_publication +
+  theme(legend.position = "none")
+
+# High vs Low
+ancom_complex_res$sig_high <- ifelse(ancom_complex_res$q_complexhigh < 0.05, 
+                                      "Significant", "Not Significant")
+
+p2 <- ggplot(ancom_complex_res, aes(x = lfc_complexhigh, y = -log10(q_complexhigh), 
+                                     color = sig_high)) +
+  geom_point(alpha = 0.6, size = 2) +
+  scale_color_manual(values = c("Significant" = "#009E73", "Not Significant" = "grey70")) +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "red") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "black") +
+  labs(
+    x = "Log Fold Change (high vs low)",
+    y = "-log10(q-value)",
+    color = "",
+    title = "High vs Low"
+  ) +
+  theme_publication +
+  theme(legend.position = "none")
+
+p1 + p2 +
+  plot_annotation(title = "ANCOM-BC: Complex Effect",
+                  theme = theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 16)))
+```
+
+### Consensus Approach (ALDEX2 + ANCOM-BC)
+
+A abordagem de consenso identifica táxons que foram significativos (p \< 0.05) em ambos os métodos (ALDEx2 e ANCOM-BC). Esta estratégia aumenta a confiabilidade dos resultados, reduzindo falsos positivos.
+
+```{r}
+#| label: consensus-approach
+
+# Find taxa significant in BOTH methods for Protease
+aldex_sig_taxa <- aldex_protease_all$taxon[aldex_protease_all$wi.ep < 0.05]
+ancom_sig_taxa <- ancom_protease_res$taxon[ancom_protease_res$p_proteaseprot < 0.05]
+
+consensus_protease <- intersect(aldex_sig_taxa, ancom_sig_taxa)
+
+# Create consensus table
+if (length(consensus_protease) > 0) {
+  consensus_protease_df <- data.frame(
+    taxon = consensus_protease,
+    aldex_effect = aldex_protease_all$effect[match(consensus_protease, aldex_protease_all$taxon)],
+    aldex_pval = aldex_protease_all$wi.ep[match(consensus_protease, aldex_protease_all$taxon)],
+    ancom_lfc = ancom_protease_res$lfc_proteaseprot[match(consensus_protease, ancom_protease_res$taxon)],
+    ancom_pval = ancom_protease_res$p_proteaseprot[match(consensus_protease, ancom_protease_res$taxon)]
+  )
+  
+  consensus_protease_df$direction <- ifelse(consensus_protease_df$aldex_effect > 0, 
+                                             "Higher in prot", "Higher in cont")
+  
+  consensus_protease_df <- consensus_protease_df[order(abs(consensus_protease_df$aldex_effect), 
+                                                        decreasing = TRUE), ]
+  
+  kable(consensus_protease_df, digits = 4,
+        caption = paste0("Consensus: Taxa significant in both ALDEx2 and ANCOM-BC for Protease (n = ", 
+                         length(consensus_protease), ")"))
+} else {
+  print("No taxa significant in both methods for Protease")
+}
+```
+
+#### Consensus Venn Diagram:
+
+```{r}
+#| label: consensus-venn
+#| fig-width: 10
+#| fig-height: 5
+
+# Create data for Venn-like visualization
+venn_data <- data.frame(
+  Method = c("ALDEx2 only", "ANCOM-BC only", "Both"),
+  Count = c(
+    length(setdiff(aldex_sig_taxa, ancom_sig_taxa)),
+    length(setdiff(ancom_sig_taxa, aldex_sig_taxa)),
+    length(consensus_protease)
+  )
+)
+
+p_venn <- ggplot(venn_data, aes(x = Method, y = Count, fill = Method)) +
+  geom_bar(stat = "identity", alpha = 0.8) +
+  geom_text(aes(label = Count), vjust = -0.5, size = 5, fontface = "bold") +
+  scale_fill_manual(values = c("ALDEx2 only" = "#56B4E9", 
+                                "ANCOM-BC only" = "#E69F00", 
+                                "Both" = "#009E73")) +
+  labs(
+    x = "",
+    y = "Number of significant taxa",
+    title = "Consensus: Protease Effect"
+  ) +
+  theme_publication +
+  theme(legend.position = "none")
+
+p_venn
+```
+
+### Plot selected taxa boxplots:
+
+Esta seção permite criar gráficos de boxplot para táxons específicos de interesse. Para alterar os táxons visualizados, basta modificar os nomes na variável \`selected_taxa\`. O código abaixo mostra como buscar nomes de táxons disponíveis nos dados. Os gráficos são gerados separadamente para cada fator (Complex e Protease).
+
+```{r}
+
+# ============================================
+# SEARCH FOR ALL TAXA 
+# ============================================
+row.names(species_frac)
+# ============================================
+
+
+# ============================================
+# SEARCH FOR TAXA CONTAINING A KEYWORD
+# ============================================
+search_term <- "Lactobacillus"
+# ============================================
+
+matching_taxa <- rownames(species_frac)[grep(search_term, rownames(species_frac), ignore.case = TRUE)]
+
+cat("Taxa matching '", search_term, "':\n", sep = "")
+print(matching_taxa)
+```
+
+```{r}
+#| label: selected-taxa-boxplot
+#| fig-width: 12
+#| fig-height: 10
+
+# ============================================
+# CHANGE THESE TAXA NAMES AS NEEDED
+# ============================================
+selected_taxa <- c(
+  "Selenomonas ruminantium",
+  "Lactobacillus amylovorus",
+  "Prevotella copri",
+  "Megasphaera elsdenii"
+)
+# ============================================
+
+# Check which taxa exist in the data
+available_taxa <- selected_taxa[selected_taxa %in% rownames(species_frac)]
+missing_taxa <- selected_taxa[!selected_taxa %in% rownames(species_frac)]
+
+if (length(missing_taxa) > 0) {
+  message("Taxa not found in data: ", paste(missing_taxa, collapse = ", "))
+}
+
+if (length(available_taxa) > 0) {
+  
+  # Extract data for selected taxa
+  plot_data <- data.frame(
+    sample = colnames(species_frac),
+    t(species_frac[available_taxa, , drop = FALSE])
+  )
+  
+  # Reshape to long format
+  plot_data_long <- plot_data %>%
+    pivot_longer(
+      cols = -sample,
+      names_to = "taxon",
+      values_to = "abundance"
+    )
+  
+  # Merge with metadata
+  plot_data_long <- merge(plot_data_long, meta_tab, by.x = "sample", by.y = "row.names")
+  
+  # Convert abundance to percentage
+  plot_data_long$abundance_pct <- plot_data_long$abundance * 100
+  
+  # Plot by Complex
+  p1 <- ggplot(plot_data_long, aes(x = complex, y = abundance_pct, fill = complex)) +
+    geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+    geom_jitter(width = 0.2, size = 2, alpha = 0.6) +
+    facet_wrap(~ taxon, scales = "free_y", ncol = 2) +
+    scale_fill_manual(values = complex_colors) +
+    stat_compare_means(method = "kruskal.test", label = "p.format", 
+                       label.x = 1.5, label.y.npc = 0.95, size = 3.5) +
+    labs(
+      x = "Diet Complexity",
+      y = "Relative Abundance (%)",
+      fill = "Complex",
+      title = "Selected Taxa by Diet Complexity"
+    ) +
+    theme_publication +
+    theme(
+      legend.position = "none",
+      strip.text = element_text(face = "bold.italic", size = 10)
+    )
+  
+  # Plot by Protease
+  p2 <- ggplot(plot_data_long, aes(x = protease, y = abundance_pct, fill = protease)) +
+    geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+    geom_jitter(width = 0.2, size = 2, alpha = 0.6) +
+    facet_wrap(~ taxon, scales = "free_y", ncol = 2) +
+    scale_fill_manual(values = protease_colors) +
+    stat_compare_means(method = "wilcox.test", label = "p.format", 
+                       label.x = 1.3, label.y.npc = 0.95, size = 3.5) +
+    labs(
+      x = "Protease Treatment",
+      y = "Relative Abundance (%)",
+      fill = "Protease",
+      title = "Selected Taxa by Protease Treatment"
+    ) +
+    theme_publication +
+    theme(
+      legend.position = "none",
+      strip.text = element_text(face = "bold.italic", size = 10)
+    )
+  
+  print(p1)
+  print(p2)
+  
+} else {
+  print("No selected taxa found in the data")
+}
+```
+
+#### Plot selected taxa with interaction (Complex × Protease):
+
+Esta seção gera gráficos mostrando a interação entre os fatores Complex e Protease para táxons específicos. Modifique a variável \`selected_taxa\` para visualizar os táxons de seu interesse.
+
+```{r}
+#| label: selected-taxa-interaction
+#| fig-width: 14
+#| fig-height: 10
+
+# ============================================
+# CHANGE THESE TAXA NAMES AS NEEDED
+# ============================================
+selected_taxa <- c(
+  "Selenomonas ruminantium",
+  "Lactobacillus amylovorus",
+  "Prevotella copri",
+  "Megasphaera elsdenii"
+)
+# ============================================
+
+# Check which taxa exist in the data
+available_taxa <- selected_taxa[selected_taxa %in% rownames(species_frac)]
+
+if (length(available_taxa) > 0) {
+  
+  # Extract data for selected taxa
+  plot_data <- data.frame(
+    sample = colnames(species_frac),
+    t(species_frac[available_taxa, , drop = FALSE])
+  )
+  
+  # Reshape to long format
+  plot_data_long <- plot_data %>%
+    pivot_longer(
+      cols = -sample,
+      names_to = "taxon",
+      values_to = "abundance"
+    )
+  
+  # Merge with metadata
+  plot_data_long <- merge(plot_data_long, meta_tab, by.x = "sample", by.y = "row.names")
+  
+  # Convert abundance to percentage
+  plot_data_long$abundance_pct <- plot_data_long$abundance * 100
+  
+  # Plot interaction
+  p_interaction <- ggplot(plot_data_long, aes(x = complex, y = abundance_pct, fill = protease)) +
+    geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+    geom_point(position = position_jitterdodge(jitter.width = 0.2), size = 2, alpha = 0.6) +
+    facet_wrap(~ taxon, scales = "free_y", ncol = 2) +
+    scale_fill_manual(values = protease_colors) +
+    labs(
+      x = "Diet Complexity",
+      y = "Relative Abundance (%)",
+      fill = "Protease",
+      title = "Selected Taxa: Complex × Protease Interaction"
+    ) +
+    theme_publication +
+    theme(
+      legend.position = "bottom",
+      strip.text = element_text(face = "bold.italic", size = 10)
+    )
+  
+  print(p_interaction)
+  
+} else {
+  print("No selected taxa found in the data")
+}
+```
+
+#### Single taxon detailed plot:
+
+```{r}
+#| label: single-taxon-plot
+#| fig-width: 10
+#| fig-height: 6
+
+# ============================================
+# CHANGE THIS TAXON NAME AS NEEDED
+# ============================================
+single_taxon <- "Selenomonas ruminantium"
+# ============================================
+
+if (single_taxon %in% rownames(species_frac)) {
+  
+  # Extract data
+  taxon_data <- data.frame(
+    sample = colnames(species_frac),
+    abundance = as.numeric(species_frac[single_taxon, ])
+  )
+  
+  # Merge with metadata
+  taxon_data <- merge(taxon_data, meta_tab, by.x = "sample", by.y = "row.names")
+  taxon_data$abundance_pct <- taxon_data$abundance * 100
+  
+  # Pairwise comparisons for complex
+  comparisons_complex <- list(c("low", "medium"), c("low", "high"), c("medium", "high"))
+  
+  # Plot
+  p_single <- ggplot(taxon_data, aes(x = complex, y = abundance_pct, fill = protease)) +
+    geom_boxplot(outlier.shape = NA, alpha = 0.7, position = position_dodge(0.8)) +
+    geom_point(position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.8), 
+               size = 3, alpha = 0.7) +
+    scale_fill_manual(values = protease_colors) +
+    labs(
+      x = "Diet Complexity",
+      y = "Relative Abundance (%)",
+      fill = "Protease",
+      title = bquote(italic(.(single_taxon)))
+    ) +
+    theme_publication +
+    theme(
+      legend.position = "right",
+      plot.title = element_text(face = "bold.italic", size = 14)
+    )
+  
+  print(p_single)
+  
+} else {
+  print(paste("Taxon not found:", single_taxon))
+}
+```
+
+#### **Plot using CLR-transformed data (for statistical comparisons):**
+
+```{r}
+#| label: selected-taxa-clr
+#| fig-width: 12
+#| fig-height: 10
+
+# ============================================
+# CHANGE THESE TAXA NAMES AS NEEDED
+# ============================================
+selected_taxa <- c(
+  "Selenomonas ruminantium",
+  "Lactobacillus amylovorus",
+  "Prevotella copri",
+  "Megasphaera elsdenii"
+)
+# ============================================
+
+# Check which taxa exist in the data
+available_taxa <- selected_taxa[selected_taxa %in% rownames(species_counts_filtered)]
+
+if (length(available_taxa) > 0) {
+  
+  # CLR transform
+  species_pseudo <- species_counts_filtered + 1
+  species_clr <- log(species_pseudo) - rowMeans(log(species_pseudo))
+  
+  # Extract data for selected taxa
+  plot_data <- data.frame(
+    sample = colnames(species_clr),
+    t(species_clr[available_taxa, , drop = FALSE])
+  )
+  
+  # Reshape to long format
+  plot_data_long <- plot_data %>%
+    pivot_longer(
+      cols = -sample,
+      names_to = "taxon",
+      values_to = "clr_abundance"
+    )
+  
+  # Merge with metadata
+  plot_data_long <- merge(plot_data_long, meta_tab, by.x = "sample", by.y = "row.names")
+  
+  # Plot by Complex
+  p_clr <- ggplot(plot_data_long, aes(x = complex, y = clr_abundance, fill = complex)) +
+    geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+    geom_jitter(width = 0.2, size = 2, alpha = 0.6) +
+    facet_wrap(~ taxon, scales = "free_y", ncol = 2) +
+    scale_fill_manual(values = complex_colors) +
+    stat_compare_means(method = "kruskal.test", label = "p.format", 
+                       label.x = 1.5, label.y.npc = 0.95, size = 3.5) +
+    labs(
+      x = "Diet Complexity",
+      y = "CLR Abundance",
+      fill = "Complex",
+      title = "Selected Taxa (CLR-transformed)"
+    ) +
+    theme_publication +
+    theme(
+      legend.position = "none",
+      strip.text = element_text(face = "bold.italic", size = 10)
+    )
+  
+  print(p_clr)
+  
+} else {
+  print("No selected taxa found in the data")
+}
+```
+
+## Taxonomic Barplots - All Levels
+
+### **Top taxa barplot - Phylum level:**
+
+```{r}
+#| label: barplot-phylum
+#| fig-width: 14
+#| fig-height: 8
+
+# ============================================
+# SETTINGS
+# ============================================
+n_top_taxa <- 10  # Number of top taxa to show
+# ============================================
+
+# Calculate mean abundance per taxon
+phylum_mean <- rowMeans(phylum_frac)
+
+# Get top taxa
+top_phyla <- names(sort(phylum_mean, decreasing = TRUE))[1:n_top_taxa]
+
+# Prepare data
+phylum_plot <- as.data.frame(t(phylum_frac))
+phylum_plot$sample <- rownames(phylum_plot)
+
+# Merge with metadata
+phylum_plot <- merge(phylum_plot, meta_tab, by.x = "sample", by.y = "row.names")
+
+# Reshape to long format
+phylum_long <- phylum_plot %>%
+  pivot_longer(
+    cols = all_of(rownames(phylum_frac)),
+    names_to = "phylum",
+    values_to = "abundance"
+  )
+
+# Group low-abundance taxa as "Other"
+phylum_long$phylum_grouped <- ifelse(phylum_long$phylum %in% top_phyla, 
+                                      phylum_long$phylum, "Other")
+
+# Aggregate
+phylum_agg <- phylum_long %>%
+  group_by(sample, complex, protease, phylum_grouped) %>%
+  summarise(abundance = sum(abundance), .groups = "drop")
+
+# Set factor order (top taxa + Other at end)
+phylum_agg$phylum_grouped <- factor(phylum_agg$phylum_grouped, 
+                                     levels = c(top_phyla, "Other"))
+
+# Order samples by complex and protease
+phylum_agg$sample <- factor(phylum_agg$sample, 
+                             levels = rownames(meta_tab)[order(meta_tab$complex, meta_tab$protease)])
+
+# Extended color palette for taxa
+taxa_colors <- c(cb_palette, "#666666", "#333333", "#AAAAAA")
+
+# Plot
+ggplot(phylum_agg, aes(x = sample, y = abundance * 100, fill = phylum_grouped)) +
+  geom_bar(stat = "identity", position = "stack") +
+  scale_fill_manual(values = taxa_colors) +
+  facet_grid(~ complex, scales = "free_x", space = "free_x") +
+  labs(
+    x = "",
+    y = "Relative Abundance (%)",
+    fill = "Phylum",
+    title = "Phylum-level Composition by Diet Complexity"
+  ) +
+  theme_publication +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 8),
+    legend.position = "right",
+    strip.text = element_text(face = "bold", size = 12)
+  )
+```
+
+### Top taxa barplot - Genus level:
+
+```{r}
+#| label: barplot-genus
+#| fig-width: 14
+#| fig-height: 8
+
+# ============================================
+# SETTINGS
+# ============================================
+n_top_taxa <- 15  # Number of top taxa to show
+# ============================================
+
+# Calculate mean abundance per taxon
+genus_mean <- rowMeans(genus_frac)
+
+# Get top taxa
+top_genera <- names(sort(genus_mean, decreasing = TRUE))[1:n_top_taxa]
+
+# Prepare data
+genus_plot <- as.data.frame(t(genus_frac))
+genus_plot$sample <- rownames(genus_plot)
+
+# Merge with metadata
+genus_plot <- merge(genus_plot, meta_tab, by.x = "sample", by.y = "row.names")
+
+# Reshape to long format
+genus_long <- genus_plot %>%
+  pivot_longer(
+    cols = all_of(rownames(genus_frac)),
+    names_to = "genus",
+    values_to = "abundance"
+  )
+
+# Group low-abundance taxa as "Other"
+genus_long$genus_grouped <- ifelse(genus_long$genus %in% top_genera, 
+                                    genus_long$genus, "Other")
+
+# Aggregate
+genus_agg <- genus_long %>%
+  group_by(sample, complex, protease, genus_grouped) %>%
+  summarise(abundance = sum(abundance), .groups = "drop")
+
+# Set factor order
+genus_agg$genus_grouped <- factor(genus_agg$genus_grouped, 
+                                   levels = c(top_genera, "Other"))
+
+# Order samples
+genus_agg$sample <- factor(genus_agg$sample, 
+                            levels = rownames(meta_tab)[order(meta_tab$complex, meta_tab$protease)])
+
+# Extended color palette
+taxa_colors_ext <- colorRampPalette(cb_palette)(n_top_taxa + 1)
+
+# Plot
+ggplot(genus_agg, aes(x = sample, y = abundance * 100, fill = genus_grouped)) +
+  geom_bar(stat = "identity", position = "stack") +
+  scale_fill_manual(values = taxa_colors_ext) +
+  facet_grid(~ complex, scales = "free_x", space = "free_x") +
+  labs(
+    x = "",
+    y = "Relative Abundance (%)",
+    fill = "Genus",
+    title = "Genus-level Composition by Diet Complexity"
+  ) +
+  theme_publication +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 8),
+    legend.position = "right",
+    legend.text = element_text(face = "italic"),
+    strip.text = element_text(face = "bold", size = 12)
+  )
+```
+
+### Top taxa barplot - Species level:
+
+```{r}
+#| label: barplot-species
+#| fig-width: 14
+#| fig-height: 8
+
+# ============================================
+# SETTINGS
+# ============================================
+n_top_taxa <- 15  # Number of top taxa to show
+# ============================================
+
+# Calculate mean abundance per taxon
+species_mean <- rowMeans(species_frac)
+
+# Get top taxa
+top_species <- names(sort(species_mean, decreasing = TRUE))[1:n_top_taxa]
+
+# Prepare data
+species_plot <- as.data.frame(t(species_frac))
+species_plot$sample <- rownames(species_plot)
+
+# Merge with metadata
+species_plot <- merge(species_plot, meta_tab, by.x = "sample", by.y = "row.names")
+
+# Reshape to long format
+species_long <- species_plot %>%
+  pivot_longer(
+    cols = all_of(rownames(species_frac)),
+    names_to = "species",
+    values_to = "abundance"
+  )
+
+# Group low-abundance taxa as "Other"
+species_long$species_grouped <- ifelse(species_long$species %in% top_species, 
+                                        species_long$species, "Other")
+
+# Aggregate
+species_agg <- species_long %>%
+  group_by(sample, complex, protease, species_grouped) %>%
+  summarise(abundance = sum(abundance), .groups = "drop")
+
+# Set factor order
+species_agg$species_grouped <- factor(species_agg$species_grouped, 
+                                       levels = c(top_species, "Other"))
+
+# Order samples
+species_agg$sample <- factor(species_agg$sample, 
+                              levels = rownames(meta_tab)[order(meta_tab$complex, meta_tab$protease)])
+
+# Extended color palette
+taxa_colors_ext <- colorRampPalette(cb_palette)(n_top_taxa + 1)
+
+# Plot
+ggplot(species_agg, aes(x = sample, y = abundance * 100, fill = species_grouped)) +
+  geom_bar(stat = "identity", position = "stack") +
+  scale_fill_manual(values = taxa_colors_ext) +
+  facet_grid(~ complex, scales = "free_x", space = "free_x") +
+  labs(
+    x = "",
+    y = "Relative Abundance (%)",
+    fill = "Species",
+    title = "Species-level Composition by Diet Complexity"
+  ) +
+  theme_publication +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 8),
+    legend.position = "right",
+    legend.text = element_text(face = "italic"),
+    strip.text = element_text(face = "bold", size = 12)
+  )
+```
+
+```{r}
+capabilities()
+```
